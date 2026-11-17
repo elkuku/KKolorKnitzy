@@ -12,12 +12,13 @@ namespace KnotAndSpool
         enum State { Playing, Won, Lost }
 
         const string LevelKey = "unravelLevel";
-        const float SlotSpacing = 1.7f;
-        const float BoardCell = 1.38f;
-        const float BoardSpoolScale = 0.82f;
+        const float SlotSpacing = 1.5f;
+        const float BoardCell = 1.3f;
+        const float BoardSpoolScale = 0.95f;
+        const float TraySpoolScale = 0.95f;
+        const float FabricMaxWidth = 6.0f;
         const float WindDuration = 0.45f;
         const float WindStagger = 0.12f;
-        const int VisibleRowsMax = 9;
 
         // Spawned at startup if the scene has no controller, so any scene works.
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -65,6 +66,7 @@ namespace KnotAndSpool
         State state;
         float overlayAt;
         LevelData data;
+        Palette.Theme theme;
         Camera cam;
         Transform root;
         int inFlight;
@@ -72,7 +74,7 @@ namespace KnotAndSpool
         // fabric
         List<Square>[] fabric;   // per column, bottom square first
         float cellSize, windowBottom, windowTop, fabricLeft;
-        int remaining, total;
+        int remaining;
 
         // tray
         Spool[] slots;
@@ -103,20 +105,24 @@ namespace KnotAndSpool
             float size = SetupCamera();
             float worldWidth = 2f * size * cam.aspect;
             float worldPerPixel = 2f * size / Screen.height;
-            float bottom = -size + 0.4f + Screen.safeArea.yMin * worldPerPixel;
-            float top = size - HudHeightPixels() * worldPerPixel;
+            float bottom = -size + 0.9f + Screen.safeArea.yMin * worldPerPixel;
 
-            Shapes.AddGradient(root, new Rect(-worldWidth / 2f, -size, worldWidth, 2f * size),
-                Palette.BackgroundTop, Palette.BackgroundBottom, -100);
+            theme = Palette.ThemeFor(level);
+            cam.backgroundColor = theme.Bottom;
+            Shapes.AddGradient(root, new Rect(-worldWidth / 2f, -size, worldWidth, 2f * size), theme.Top, theme.Bottom, -100);
 
             data = LevelGenerator.Generate(level);
 
-            // Bottom-up: board, tray, then the fabric window fills the rest up to the HUD.
-            float boardTop = bottom + data.BoardHeight * BoardCell + 0.2f;
+            // Bottom-up: board on a darker floor, the tray above it, then the fabric hangs from the top of the screen.
+            float boardTop = bottom + data.BoardHeight * BoardCell;
+            float floorTop = boardTop + 0.55f;
+            float floorH = floorTop + size + 1f;
+            Shapes.AddRect(root, "Floor", new Vector2(0f, floorTop - floorH / 2f), new Vector2(worldWidth + 2f, floorH), theme.Floor, -90);
+            Shapes.AddRect(root, "FloorEdge", new Vector2(0f, floorTop - 0.06f), new Vector2(worldWidth + 2f, 0.12f), theme.FloorEdge, -89);
             BuildBoard(boardTop);
-            float slotY = boardTop + 1.45f;
+            float slotY = floorTop + 1.45f;
             BuildTray(slotY);
-            BuildFabric(Rect.MinMaxRect(-4.2f, slotY + 1.5f, 4.2f, top - 0.9f));
+            BuildFabric(Rect.MinMaxRect(-FabricMaxWidth / 2f, slotY + 2.0f, FabricMaxWidth / 2f, size));
             RefreshBoard();
         }
 
@@ -132,36 +138,31 @@ namespace KnotAndSpool
             cam.orthographicSize = Mathf.Max(8f, 5.2f / cam.aspect);
             cam.transform.SetPositionAndRotation(new Vector3(0, 0, -10), Quaternion.identity);
             cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = Palette.Background;
             return cam.orthographicSize;
         }
 
         void BuildFabric(Rect area)
         {
             int w = data.Width, h = data.Height;
-            int visibleRows = Mathf.Min(h, VisibleRowsMax);
-            cellSize = Mathf.Min(area.width / w, area.height / visibleRows);
-            float windowW = cellSize * w, windowH = cellSize * visibleRows;
-            // The window hangs from the top of the area; the fabric's bottom edge sits at the window bottom.
+            // A narrow strip of fabric in a wooden frame that runs up off the top of the screen.
+            // The fabric's bottom edge sits just above the tray; taller fabric scrolls in from the top of the screen.
+            cellSize = Mathf.Min(area.width / w, area.height / h, 1.0f);
+            float windowW = cellSize * w;
+            windowBottom = area.yMin;
             windowTop = area.yMax;
-            windowBottom = windowTop - windowH;
             fabricLeft = -windowW / 2f;
-            var center = new Vector2(0f, (windowTop + windowBottom) / 2f);
 
-            // Frame, canvas and a wooden rod the fabric hangs from.
-            var frame = new Vector2(windowW + 0.4f, windowH + 0.4f);
-            Shapes.AddShadow(root, "FrameShadow", center + new Vector2(0f, -0.25f), frame * 1.12f, Palette.Shadow, -22);
-            Shapes.AddRect(root, "Frame", center, frame, Palette.Frame, -21);
-            Shapes.AddRect(root, "Canvas", center, new Vector2(windowW + 0.1f, windowH + 0.1f), Palette.Panel, -20);
-            Shapes.AddRect(root, "Rod", new Vector2(0f, windowTop + 0.35f), new Vector2(windowW + 1.2f, 0.36f), Palette.WoodDark, 40);
-            Shapes.AddRect(root, "RodShine", new Vector2(0f, windowTop + 0.42f), new Vector2(windowW + 1.0f, 0.08f), new Color(1f, 0.9f, 0.75f, 0.45f), 41);
-            foreach (float x in new[] { -windowW / 2f - 0.6f, windowW / 2f + 0.6f })
-                Shapes.AddCircle(root, "RodKnob", new Vector2(x, windowTop + 0.35f), 0.5f, Palette.WoodDark, 42);
-            // A curtain strip above the window hides squares that are still scrolling in.
-            Shapes.AddRect(root, "TopCover", new Vector2(0f, windowTop + 0.12f), new Vector2(windowW + 0.4f, 0.26f), Palette.Frame, 39);
+            float frameH = windowTop - windowBottom + 2f;
+            var frameCenter = new Vector2(0f, windowBottom - 0.2f + frameH / 2f);
+            Shapes.AddShadow(root, "FrameShadow", new Vector2(0f, windowBottom - 0.3f), new Vector2(windowW + 2.2f, 1.2f), Palette.Shadow, -23);
+            Shapes.AddRect(root, "Frame", frameCenter, new Vector2(windowW + 0.7f, frameH), Palette.WoodDark, -22);
+            Shapes.AddRect(root, "FrameInner", frameCenter + new Vector2(0f, 0.1f), new Vector2(windowW + 0.4f, frameH), Palette.WoodLight, -21);
+            Shapes.AddRect(root, "Canvas", frameCenter + new Vector2(0f, 0.2f), new Vector2(windowW + 0.06f, frameH), Palette.Shade(theme.Tile, 0.9f), -20);
+            // the edge where the yarn leaves the fabric
+            Shapes.AddRect(root, "Lip", new Vector2(0f, windowBottom - 0.12f), new Vector2(windowW + 0.4f, 0.16f), Palette.WoodDark, 60);
 
             fabric = new List<Square>[w];
-            remaining = total = w * h;
+            remaining = w * h;
             for (int c = 0; c < w; c++)
             {
                 fabric[c] = new List<Square>();
@@ -221,13 +222,12 @@ namespace KnotAndSpool
         {
             slots = new Spool[data.Slots];
             slotPositions = new Vector3[data.Slots];
-            float width = data.Slots * SlotSpacing + 0.3f;
-            Shapes.AddShadow(root, "ShelfShadow", new Vector2(0f, slotY - 0.25f), new Vector2(width * 1.1f, 2.2f), Palette.Shadow, -16);
-            Shapes.AddRect(root, "Shelf", new Vector2(0f, slotY), new Vector2(width, 1.9f), Palette.Shelf, -15);
             for (int i = 0; i < data.Slots; i++)
             {
                 slotPositions[i] = new Vector3((i - (data.Slots - 1) / 2f) * SlotSpacing, slotY, 0f);
-                Shapes.AddRect(root, $"Slot{i}", slotPositions[i], new Vector2(1.45f, 1.6f), Palette.SlotEmpty, -14);
+                // empty slot: a soft white pad the spool stands on
+                Shapes.AddShadow(root, $"SlotShadow{i}", slotPositions[i] + new Vector3(0f, -0.1f, 0f), new Vector2(1.6f, 1.6f), new Color(0f, 0f, 0f, 0.08f), -15);
+                Shapes.AddRect(root, $"Slot{i}", slotPositions[i], new Vector2(1.18f, 1.18f), new Color(1f, 1f, 1f, 0.85f), -14);
             }
         }
 
@@ -237,22 +237,16 @@ namespace KnotAndSpool
             board = new Spool[bh, bw];
             boardPos = new Vector3[bh, bw];
             float left = -(bw - 1) / 2f * BoardCell;
-            var size = new Vector2(bw * BoardCell + 0.3f, bh * BoardCell + 0.3f);
-            var center = new Vector2(0f, boardTop - bh * BoardCell / 2f);
-            Shapes.AddRect(root, "Board", center, size, Palette.Frame, -13);
 
             for (int r = 0; r < bh; r++)
             for (int c = 0; c < bw; c++)
             {
                 var p = new Vector3(left + c * BoardCell, boardTop - (r + 0.5f) * BoardCell, 0f);
                 boardPos[r, c] = p;
-                if (data.Walls[r, c])
-                {
-                    Shapes.AddRect(root, "Wall", p, Vector2.one * (BoardCell - 0.08f), Palette.WoodDark, -12);
-                    Shapes.AddRect(root, "WallShine", p + new Vector3(0f, 0.38f, 0f), new Vector2(BoardCell - 0.3f, 0.08f), new Color(1f, 0.9f, 0.75f, 0.35f), -11);
-                    continue;
-                }
-                Shapes.AddRect(root, "Tile", p, Vector2.one * (BoardCell - 0.08f), Palette.Panel, -12);
+                // walls are simply gaps where the floor shows through
+                if (data.Walls[r, c]) continue;
+                Shapes.AddRect(root, "TileEdge", p + new Vector3(0f, -0.06f, 0f), Vector2.one * (BoardCell - 0.06f), Palette.Shade(theme.Tile, 0.86f), -13);
+                Shapes.AddRect(root, "Tile", p, Vector2.one * (BoardCell - 0.06f), theme.Tile, -12);
 
                 var spec = data.Board[r, c];
                 if (spec == null) continue;
@@ -394,9 +388,8 @@ namespace KnotAndSpool
         IEnumerator SendToSlot(Spool spool, int slot)
         {
             inFlight++;
-            spool.SetReachable(true);
-            if (spool.Hidden) StartCoroutine(spool.Reveal());
-            yield return spool.MoveTo(slotPositions[slot], 1f, 0.3f);
+            spool.StandUp();
+            yield return spool.MoveTo(slotPositions[slot], TraySpoolScale, 0.3f);
             spool.InSlot = true;
             inFlight--;
         }
@@ -457,7 +450,7 @@ namespace KnotAndSpool
                 square.Transform.localScale = Vector3.one * Mathf.Lerp(1f, 0.15f, e);
                 for (int i = 0; i < segments; i++)
                     thread.SetPosition(i, Bezier(start, control, end, Mathf.Lerp(e, 1f, i / (float)(segments - 1))));
-                thread.widthMultiplier = 0.09f * (1f - 0.5f * k);
+                thread.widthMultiplier = 0.15f * (1f - 0.4f * k);
                 yield return null;
             }
             Destroy(square.Transform.gameObject);
@@ -484,7 +477,7 @@ namespace KnotAndSpool
             lr.sharedMaterial = Shapes.SpriteMaterial;
             lr.useWorldSpace = true;
             lr.positionCount = 12;
-            lr.widthMultiplier = 0.09f;
+            lr.widthMultiplier = 0.15f;
             lr.numCapVertices = 4;
             lr.startColor = lr.endColor = color;
             lr.sortingOrder = 1499;
@@ -558,14 +551,11 @@ namespace KnotAndSpool
 
         // ---------- HUD ----------
 
-        GUIStyle pillStyle, buttonStyle, cardStyle, titleStyle, subtitleStyle;
+        GUIStyle pillStyle, levelStyle, buttonStyle, cardStyle, titleStyle, subtitleStyle;
         float styleUnit;
 
         /// HUD size unit in pixels.
         static float HudUnit() => Mathf.Min(Screen.height / 40f, Screen.width / 18f);
-
-        /// Pixels from the top of the screen to the bottom of the HUD row.
-        static float HudHeightPixels() => Screen.height - Screen.safeArea.yMax + HudUnit() * 2.7f;
 
         void EnsureStyles(float u)
         {
@@ -593,6 +583,8 @@ namespace KnotAndSpool
             }
 
             pillStyle = Make(GUI.skin.box, 0.95f, Palette.Text);
+            levelStyle = Make(GUI.skin.box, 0.55f, Palette.Text);
+            levelStyle.padding = new RectOffset((int)(u * 0.4f), (int)(u * 0.4f), 0, 0);
             buttonStyle = Make(GUI.skin.button, 1.0f, Color.white);
             cardStyle = Make(GUI.skin.box, 1f, Palette.Text);
             titleStyle = new GUIStyle(GUI.skin.label) { fontSize = Mathf.RoundToInt(u * 1.9f), fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
@@ -610,29 +602,21 @@ namespace KnotAndSpool
             float top = Screen.height - safe.yMax + u * 0.6f;
             var oldBg = GUI.backgroundColor;
 
-            string title = $"Level {level}";
-            float pillW = pillStyle.CalcSize(new GUIContent(title)).x + u * 1.5f;
-            GUI.backgroundColor = new Color(1f, 1f, 1f, 0.92f);
-            GUI.Box(new Rect(safe.xMin + u * 0.8f, top, pillW, u * 1.9f), title, pillStyle);
-
-            GUI.backgroundColor = Palette.Accent;
-            if (GUI.Button(new Rect(safe.xMax - u * 5f, top, u * 4.2f, u * 1.9f), "Retry", buttonStyle))
+            // Top-left corner beside the fabric: a round restart button with the level number under it.
+            float x = safe.xMin + u * 0.4f;
+            var retry = new Rect(x, top, u * 2.2f, u * 2.2f);
+            GUI.backgroundColor = new Color(1f, 1f, 1f, 0.9f);
+            if (GUI.Button(retry, GUIContent.none, pillStyle))
                 BuildLevel();
+            var oldColor0 = GUI.color;
+            GUI.color = theme.Accent;
+            GUI.DrawTexture(new Rect(retry.x + u * 0.25f, retry.y + u * 0.25f, u * 1.7f, u * 1.7f), Shapes.RetryIcon);
+            GUI.color = oldColor0;
 
-            // progress bar between the level label and the Retry button
-            float barX = safe.xMin + u * 1.6f + pillW, barW = safe.xMax - u * 5.8f - barX;
-            float barY = top + u * 0.75f;
-            if (barW > u * 2f)
-            {
-                GUI.backgroundColor = new Color(0.85f, 0.75f, 0.62f, 0.6f);
-                GUI.Box(new Rect(barX, barY, barW, u * 0.45f), GUIContent.none, pillStyle);
-                float done = (total - remaining) / (float)total;
-                if (done > 0f)
-                {
-                    GUI.backgroundColor = Palette.Get(3);
-                    GUI.Box(new Rect(barX, barY, Mathf.Max(u * 0.45f, barW * done), u * 0.45f), GUIContent.none, pillStyle);
-                }
-            }
+            string title = $"Level {level}";
+            float pillW = levelStyle.CalcSize(new GUIContent(title)).x + u * 0.9f;
+            GUI.backgroundColor = new Color(1f, 1f, 1f, 0.75f);
+            GUI.Box(new Rect(x, top + u * 2.6f, pillW, u * 1.2f), title, levelStyle);
 
             GUI.backgroundColor = oldBg;
             if (state == State.Playing || Time.time < overlayAt) return;
@@ -649,7 +633,7 @@ namespace KnotAndSpool
             GUI.Label(new Rect(card.x, card.y + u * 1.2f, card.width, u * 2.5f), won ? "Unravelled!" : "Out of room!", titleStyle);
             GUI.Label(new Rect(card.x, card.y + u * 3.8f, card.width, u * 1.6f),
                 won ? "Every square is wound up." : "The tray is full. Try another order.", subtitleStyle);
-            GUI.backgroundColor = won ? Palette.Get(3) : Palette.Accent;
+            GUI.backgroundColor = won ? Palette.Get(3) : theme.Accent;
             if (GUI.Button(new Rect(card.x + u * 3f, card.y + u * 6.8f, card.width - u * 6f, u * 2.6f), won ? "Next level" : "Try again", buttonStyle))
             {
                 if (won) level++;

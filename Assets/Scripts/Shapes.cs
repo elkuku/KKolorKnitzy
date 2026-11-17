@@ -6,7 +6,7 @@ namespace KnotAndSpool
     public static class Shapes
     {
         static Sprite circle, softCircle, roundRect, stitch, gradient;
-        static Texture2D guiRoundRect;
+        static Texture2D guiRoundRect, retryIcon;
         static Material spriteMaterial;
         static Font font;
 
@@ -16,6 +16,7 @@ namespace KnotAndSpool
         public static Sprite Stitch => stitch != null ? stitch : (stitch = MakeStitch(96));
         public static Sprite Gradient => gradient != null ? gradient : (gradient = MakeGradient(256));
         public static Texture2D GuiRoundRect => guiRoundRect != null ? guiRoundRect : (guiRoundRect = MakeRoundRectTexture(64, 24));
+        public static Texture2D RetryIcon => retryIcon != null ? retryIcon : (retryIcon = MakeRetryIcon(96));
         public static Font Font => font != null ? font : (font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
 
         /// The default sprite material (always included in builds); also used for LineRenderers.
@@ -41,6 +42,13 @@ namespace KnotAndSpool
             sr.sprite = Circle;
             sr.color = color;
             sr.transform.localScale = new Vector3(diameter, diameter, 1f);
+            return sr;
+        }
+
+        public static SpriteRenderer AddEllipse(Transform parent, string name, Vector2 localPos, Vector2 size, Color color, int order)
+        {
+            var sr = AddCircle(parent, name, localPos, 1f, color, order);
+            sr.transform.localScale = new Vector3(size.x, size.y, 1f);
             return sr;
         }
 
@@ -213,6 +221,49 @@ namespace KnotAndSpool
             tex.SetPixels32(px);
             tex.Apply();
             return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+        }
+
+        /// Circular "restart" arrow, white on transparent.
+        static Texture2D MakeRetryIcon(int size)
+        {
+            var tex = NewTexture(size);
+            var px = new Color32[size * size];
+            var c = new Vector2(size / 2f, size / 2f);
+            float outer = size * 0.36f, inner = size * 0.24f;
+            // arrow head at the end of the ring, pointing into the gap
+            float headAngle = 60f * Mathf.Deg2Rad;
+            var dir = new Vector2(Mathf.Cos(headAngle), Mathf.Sin(headAngle));
+            var tangent = new Vector2(-dir.y, dir.x); // counter-clockwise, into the gap
+            var mid = c + dir * (outer + inner) / 2f;
+            var tip = mid + tangent * size * 0.16f;
+            var b1 = mid + dir * size * 0.17f;
+            var b2 = mid - dir * size * 0.17f;
+            for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                var p = new Vector2(x + 0.5f, y + 0.5f);
+                var d = p - c;
+                float r = d.magnitude;
+                float ang = Mathf.Atan2(d.y, d.x) * Mathf.Rad2Deg;
+                if (ang < 0f) ang += 360f;
+                float a = 0f;
+                // ring from the arrow head round to ~30° before it
+                if (ang < 60f || ang > 100f)
+                    a = Mathf.Clamp01(Mathf.Min(r - inner, outer - r) + 0.5f);
+                if (InTriangle(p, tip, b1, b2)) a = 1f;
+                px[y * size + x] = new Color32(255, 255, 255, (byte)(a * 255));
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            return tex;
+        }
+
+        static bool InTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)
+        {
+            float Side(Vector2 p1, Vector2 p2, Vector2 p3) => (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+            float d1 = Side(p, a, b), d2 = Side(p, b, c), d3 = Side(p, c, a);
+            bool neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
+            return !(neg && pos);
         }
 
         /// White with alpha fading from 1 (top) to 0 (bottom); stacked over a solid color it makes a gradient.

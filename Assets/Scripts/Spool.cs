@@ -4,10 +4,13 @@ using UnityEngine;
 
 namespace KnotAndSpool
 {
-    /// A wooden spool that winds a fixed number of fabric squares, getting fatter as it fills up.
+    /// A spool of yarn. On the board it is seen from above (a round spool top); in the tray it stands up as a
+    /// yarn cylinder with a progress bar that fills as fabric squares are wound onto it.
     public class Spool : MonoBehaviour
     {
-        static readonly Color HiddenYarn = Palette.Hex(0xB9B4AE);
+        static readonly Color HiddenTop = Palette.Hex(0xF4F1F4);
+        static readonly Color HiddenSide = Palette.Hex(0xC9C3CC);
+        static readonly Color HiddenMark = Palette.Hex(0x9A93A0);
 
         public int ColorIndex { get; private set; }
         public int Count { get; private set; }     // squares the spool holds when full
@@ -17,14 +20,21 @@ namespace KnotAndSpool
         public bool InSlot { get; set; }
         public bool Completing { get; set; }
 
-        public Vector3 ThreadOrigin => transform.position;
+        /// Where the yarn strand attaches: the top of the standing spool.
+        public Vector3 ThreadOrigin => transform.position + Vector3.up * (0.55f * transform.localScale.y);
 
-        readonly List<SpriteRenderer> parts = new List<SpriteRenderer>();
-        readonly List<Color> baseColors = new List<Color>();
-        readonly List<SpriteRenderer> rings = new List<SpriteRenderer>();
-        Transform body, yarnRoot;
-        SpriteRenderer yarn, band;
-        TextMesh label;
+        // board (top-down) view
+        readonly List<SpriteRenderer> boardParts = new List<SpriteRenderer>();
+        readonly List<Color> boardColors = new List<Color>();
+        SpriteRenderer boardSide, boardTop, boardRing, boardHole;
+        TextMesh hiddenMark;
+
+        // tray (standing) view
+        Transform body, boardView, trayView;
+        SpriteRenderer barFill;
+        TextMesh percent;
+        const float BarWidth = 1.0f;
+
         bool dim;
 
         public void Init(int colorIndex, int count, bool hidden)
@@ -33,68 +43,95 @@ namespace KnotAndSpool
             Count = count;
             Hidden = hidden;
 
-            Shapes.AddShadow(transform, "Shadow", new Vector2(0f, -0.7f), new Vector2(1.6f, 0.5f), Palette.Shadow, 499);
             body = new GameObject("Body").transform;
             body.SetParent(transform, false);
-
-            Part(Shapes.AddRect(body, "Core", Vector2.zero, new Vector2(0.46f, 1.1f), Palette.WoodLight, 500));
-            band = Part(Shapes.AddRect(body, "Band", Vector2.zero, new Vector2(0.46f, 0.42f), Color.white, 501));
-
-            yarnRoot = new GameObject("Yarn").transform;
-            yarnRoot.SetParent(body, false);
-            yarn = Part(Shapes.AddRect(yarnRoot, "Wound", Vector2.zero, new Vector2(1.04f, 0.84f), Color.white, 502));
-            for (int i = 0; i < 4; i++)
-                rings.Add(Part(Shapes.AddRect(yarnRoot, $"Ring{i}", new Vector2(0f, -0.27f + i * 0.18f), new Vector2(0.98f, 0.05f), Color.white, 503)));
-            Part(Shapes.AddRect(yarnRoot, "Shine", new Vector2(-0.32f, 0.02f), new Vector2(0.1f, 0.6f), new Color(1f, 1f, 1f, 0.35f), 504));
-
-            foreach (float y in new[] { 0.55f, -0.55f })
-            {
-                Part(Shapes.AddRect(body, "Cap", new Vector2(0f, y), new Vector2(1.3f, 0.24f), Palette.WoodDark, 505));
-                Part(Shapes.AddRect(body, "CapShine", new Vector2(0f, y + 0.05f), new Vector2(1.12f, 0.06f), new Color(1f, 0.9f, 0.75f, 0.45f), 506));
-            }
-
-            Part(Shapes.AddCircle(body, "BadgeRim", new Vector2(0.5f, 0.6f), 0.6f, Palette.Frame, 507));
-            Part(Shapes.AddCircle(body, "Badge", new Vector2(0.5f, 0.6f), 0.5f, Color.white, 508));
-            label = Shapes.AddText(body, "Count", new Vector2(0.5f, 0.6f), 0.3f, Palette.Text, 509);
-
-            ApplyYarnColor(hidden ? HiddenYarn : Palette.Get(colorIndex));
-            UpdateLabel();
-            yarnRoot.gameObject.SetActive(false); // starts empty
+            BuildBoardView();
+            BuildTrayView();
+            trayView.gameObject.SetActive(false);
+            ApplyBoardColors();
         }
 
-        SpriteRenderer Part(SpriteRenderer sr)
+        void BuildBoardView()
         {
-            parts.Add(sr);
-            baseColors.Add(sr.color);
+            boardView = new GameObject("BoardView").transform;
+            boardView.SetParent(body, false);
+            BoardPart(Shapes.AddShadow(boardView, "Shadow", new Vector2(0f, -0.26f), new Vector2(1.25f, 0.55f), new Color(0f, 0f, 0f, 0.22f), 498));
+            boardSide = BoardPart(Shapes.AddEllipse(boardView, "Side", new Vector2(0f, -0.1f), new Vector2(0.98f, 0.94f), Color.white, 500));
+            boardTop = BoardPart(Shapes.AddEllipse(boardView, "Top", new Vector2(0f, 0.04f), new Vector2(0.98f, 0.9f), Color.white, 501));
+            boardRing = BoardPart(Shapes.AddEllipse(boardView, "Ring", new Vector2(0f, 0.04f), new Vector2(0.56f, 0.52f), Color.white, 502));
+            boardHole = BoardPart(Shapes.AddEllipse(boardView, "Hole", new Vector2(0f, 0.04f), new Vector2(0.2f, 0.18f), Color.white, 503));
+            BoardPart(Shapes.AddEllipse(boardView, "Shine", new Vector2(-0.2f, 0.25f), new Vector2(0.26f, 0.12f), new Color(1f, 1f, 1f, 0.55f), 504));
+            hiddenMark = Shapes.AddText(boardView, "Mark", new Vector2(0f, 0.04f), 0.5f, HiddenMark, 505);
+        }
+
+        void BuildTrayView()
+        {
+            trayView = new GameObject("TrayView").transform;
+            trayView.SetParent(body, false);
+            var color = Palette.Get(ColorIndex);
+            var dark = Palette.Shade(color, 0.72f);
+            var light = Palette.Tint(color, 0.35f);
+
+            Shapes.AddShadow(trayView, "Shadow", new Vector2(0f, -0.6f), new Vector2(1.5f, 0.45f), new Color(0f, 0f, 0f, 0.2f), 498);
+            Shapes.AddEllipse(trayView, "BottomRim", new Vector2(0f, -0.48f), new Vector2(1.08f, 0.36f), dark, 500);
+            Shapes.AddRect(trayView, "Yarn", new Vector2(0f, -0.02f), new Vector2(0.92f, 0.9f), color, 501);
+            for (int i = 0; i < 5; i++)
+                Shapes.AddRect(trayView, $"Strand{i}", new Vector2(0f, -0.36f + i * 0.17f), new Vector2(0.9f, 0.045f), Palette.Shade(color, 0.84f), 502);
+            Shapes.AddRect(trayView, "Shine", new Vector2(-0.27f, -0.02f), new Vector2(0.1f, 0.74f), new Color(1f, 1f, 1f, 0.32f), 503);
+            Shapes.AddEllipse(trayView, "TopRim", new Vector2(0f, 0.46f), new Vector2(1.08f, 0.38f), light, 504);
+            Shapes.AddEllipse(trayView, "TopInner", new Vector2(0f, 0.46f), new Vector2(0.62f, 0.2f), color, 505);
+            Shapes.AddEllipse(trayView, "Hole", new Vector2(0f, 0.46f), new Vector2(0.22f, 0.08f), dark, 506);
+
+            // progress bar and percentage under the spool
+            Shapes.AddRect(trayView, "BarBack", new Vector2(0f, -0.92f), new Vector2(BarWidth, 0.16f), new Color(1f, 1f, 1f, 0.75f), 500);
+            barFill = Shapes.AddRect(trayView, "BarFill", new Vector2(-BarWidth / 2f, -0.92f), new Vector2(0.01f, 0.16f), color, 501);
+            barFill.enabled = false;
+            percent = Shapes.AddText(trayView, "Percent", new Vector2(0f, -1.22f), 0.3f, Palette.Text, 502);
+            UpdateProgress();
+        }
+
+        SpriteRenderer BoardPart(SpriteRenderer sr)
+        {
+            boardParts.Add(sr);
+            boardColors.Add(sr.color);
             return sr;
         }
 
-        void SetBase(SpriteRenderer sr, Color c)
+        void SetBoardColor(SpriteRenderer sr, Color c)
         {
-            int i = parts.IndexOf(sr);
-            baseColors[i] = c;
+            int i = boardParts.IndexOf(sr);
+            boardColors[i] = c;
             sr.color = dim ? Darken(c) : c;
         }
 
-        void ApplyYarnColor(Color c)
+        void ApplyBoardColors()
         {
-            SetBase(yarn, c);
-            SetBase(band, c);
-            foreach (var r in rings) SetBase(r, Palette.Shade(c, 0.8f));
+            if (Hidden)
+            {
+                SetBoardColor(boardSide, HiddenSide);
+                SetBoardColor(boardTop, HiddenTop);
+                SetBoardColor(boardRing, HiddenTop);
+                SetBoardColor(boardHole, HiddenTop);
+                hiddenMark.text = "?";
+                return;
+            }
+            var color = Palette.Get(ColorIndex);
+            SetBoardColor(boardSide, Palette.Shade(color, 0.7f));
+            SetBoardColor(boardTop, color);
+            SetBoardColor(boardRing, Palette.Tint(color, 0.3f));
+            SetBoardColor(boardHole, Palette.Shade(color, 0.55f));
+            hiddenMark.text = "";
         }
 
-        static Color Darken(Color c) => new Color(c.r * 0.62f, c.g * 0.62f, c.b * 0.62f, c.a);
+        static Color Darken(Color c) => new Color(c.r * 0.78f, c.g * 0.78f, c.b * 0.78f, c.a);
 
-        void UpdateLabel() => label.text = Hidden ? "?" : (Count - Reserved).ToString();
-
-        /// Spools that can't be tapped yet are drawn darker.
+        /// Spools that can't be tapped yet are drawn a little darker.
         public void SetReachable(bool reachable)
         {
             if (dim == !reachable) return;
             dim = !reachable;
-            for (int i = 0; i < parts.Count; i++)
-                parts[i].color = dim ? Darken(baseColors[i]) : baseColors[i];
-            label.color = dim ? Darken(Palette.Text) : Palette.Text;
+            for (int i = 0; i < boardParts.Count; i++)
+                boardParts[i].color = dim ? Darken(boardColors[i]) : boardColors[i];
         }
 
         public IEnumerator Reveal()
@@ -105,8 +142,7 @@ namespace KnotAndSpool
                 body.localScale = new Vector3(Mathf.Lerp(1f, 0f, t / 0.15f), 1f, 1f);
                 yield return null;
             }
-            ApplyYarnColor(Palette.Get(ColorIndex));
-            UpdateLabel();
+            ApplyBoardColors();
             for (float t = 0f; t < 0.15f; t += Time.deltaTime)
             {
                 body.localScale = new Vector3(Mathf.Lerp(0f, 1f, t / 0.15f), 1f, 1f);
@@ -115,19 +151,36 @@ namespace KnotAndSpool
             body.localScale = Vector3.one;
         }
 
-        public void Reserve()
-        {
-            Reserved++;
-            UpdateLabel();
-        }
+        public void Reserve() => Reserved++;
 
         public void AddYarn()
         {
             Filled++;
-            float f = Filled / (float)Count;
-            yarnRoot.gameObject.SetActive(true);
-            yarnRoot.localScale = new Vector3(Mathf.Lerp(0.5f, 1f, f), Mathf.Lerp(0.75f, 1f, f), 1f);
+            UpdateProgress();
             StartCoroutine(Bounce());
+        }
+
+        void UpdateProgress()
+        {
+            float f = Count > 0 ? Filled / (float)Count : 0f;
+            barFill.enabled = f > 0f;
+            float w = Mathf.Max(0.16f, BarWidth * f);
+            barFill.size = new Vector2(w, 0.16f);
+            barFill.transform.localPosition = new Vector3(-BarWidth / 2f + w / 2f, -0.92f, 0f);
+            percent.text = $"{Mathf.RoundToInt(f * 100f)}%";
+        }
+
+        /// Flips from the board look to the standing spool used in the tray.
+        public void StandUp()
+        {
+            SetReachable(true);
+            if (Hidden)
+            {
+                Hidden = false;
+                ApplyBoardColors();
+            }
+            boardView.gameObject.SetActive(false);
+            trayView.gameObject.SetActive(true);
         }
 
         public IEnumerator MoveTo(Vector3 target, float scale, float duration)

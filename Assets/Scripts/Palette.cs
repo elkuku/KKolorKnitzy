@@ -41,10 +41,41 @@ namespace KnotAndSpool
         public static readonly Color Accent = Hex(0xE7835F);
         public static readonly Color Shadow = new Color(0.25f, 0.15f, 0.05f, 0.22f);
 
+        /// Pastel colour scheme of a level: sky, floor under the board, board tiles.
+        public readonly struct Theme
+        {
+            public readonly Color Top, Bottom, Floor, FloorEdge, Tile, Accent;
+
+            public Theme(int top, int bottom, int floor, int tile, int accent)
+            {
+                Top = Hex(top);
+                Bottom = Hex(bottom);
+                Floor = Hex(floor);
+                FloorEdge = Shade(Floor, 0.85f);
+                Tile = Hex(tile);
+                Accent = Hex(accent);
+            }
+        }
+
+        static readonly Theme[] Themes =
+        {
+            new Theme(0xF9E4EC, 0xF2C9D9, 0x9C82A6, 0xFBEAF1, 0xE0679A), // rose
+            new Theme(0xDDF1E6, 0xBFE2D0, 0x5F9585, 0xEEF8F2, 0x3FA37B), // mint
+            new Theme(0xE6E2F6, 0xCFC8EE, 0x8B85AC, 0xF3F1FB, 0x7C6BD6), // lilac
+            new Theme(0xFCE0D6, 0xF4B3A2, 0xB0665C, 0xFCEEE9, 0xE36E55), // coral
+            new Theme(0xDCE9FA, 0xBBD3F2, 0x7D93B9, 0xEEF4FD, 0x4C86D9), // sky
+            new Theme(0xF3E7DD, 0xE6D0C0, 0x9E847A, 0xFAF2EC, 0xC27A52), // sand
+        };
+
+        public static Theme ThemeFor(int level) => Themes[(Mathf.Max(1, level) - 1) % Themes.Length];
+
         public static Color Hex(int rgb) =>
             new Color(((rgb >> 16) & 0xFF) / 255f, ((rgb >> 8) & 0xFF) / 255f, (rgb & 0xFF) / 255f, 1f);
 
         /// Multiply brightness, keep alpha.
         public static Color Shade(Color c, float f) => new Color(c.r * f, c.g * f, c.b * f, c.a);
+
+        /// Blend toward white, keep alpha.
+        public static Color Tint(Color c, float f) => new Color(Mathf.Lerp(c.r, 1f, f), Mathf.Lerp(c.g, 1f, f), Mathf.Lerp(c.b, 1f, f), c.a);
     }
 }
