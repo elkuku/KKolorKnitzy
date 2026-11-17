@@ -17,7 +17,7 @@ Levels are generated from the level number (always the same layout for the same 
 2. In Unity Hub: **Add → Add project from disk** → choose this folder.
 3. On first open Unity imports packages. If it asks to enable the new Input System backend, accept and let it restart.
 4. The editor script automatically creates `Assets/Scenes/Main.unity`, adds it to the build, and sets Android player settings
-   (portrait, package `com.elkuku.knotandspool`, IL2CPP, ARM64, min API 24).
+   (portrait, package `com.elkuku.knotandspool`, IL2CPP, ARM64, min API 25).
 5. Press **Play** to test in the editor (click = tap).
 
 ## Building for Android

@@ -12,3 +12,5 @@
 *.sln
 *.apk
 *.aab
+.vscode/
+*.slnx
