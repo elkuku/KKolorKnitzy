@@ -14,3 +14,4 @@
 *.aab
 .vscode/
 *.slnx
+/.utmp/

@@ -39,6 +39,12 @@ namespace KnotAndSpool
         int inFlight;
         bool looksDirty;
 
+#if ENABLE_INPUT_SYSTEM
+        // EnhancedTouch also reports touches that begin and end within a single frame (quick taps).
+        void OnEnable() => UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Enable();
+        void OnDisable() => UnityEngine.InputSystem.EnhancedTouch.EnhancedTouchSupport.Disable();
+#endif
+
         void Start()
         {
             Application.targetFrameRate = 60;
@@ -59,7 +65,15 @@ namespace KnotAndSpool
             state = State.Playing;
 
             float size = SetupCamera();
-            var knotArea = Rect.MinMaxRect(-4.3f, -size * 0.05f, 4.3f, size - 2.0f);
+
+            // Lay out bottom-up: 3 visible spools per column, the tray above them, the board fills the rest
+            // up to just below the HUD. Safe-area insets (notch, gesture bar) are kept clear.
+            float worldPerPixel = 2f * size / Screen.height;
+            float bottom = -size + 0.9f + Screen.safeArea.yMin * worldPerPixel;
+            float columnTop = bottom + 2f * StackSpacing;
+            float slotY = columnTop + 2.3f;
+            float hudBottom = size - HudHeightPixels() * worldPerPixel;
+            var knotArea = Rect.MinMaxRect(-4.3f, slotY + 1.9f, 4.3f, hudBottom - 0.6f);
             data = LevelGenerator.Generate(level, knotArea);
 
             var panelRect = Rect.MinMaxRect(knotArea.xMin - 0.4f, knotArea.yMin - 0.4f, knotArea.xMax + 0.4f, knotArea.yMax + 0.4f);
@@ -81,7 +95,6 @@ namespace KnotAndSpool
             threads.AddRange(byIndex);
 
             // Tray slots
-            float slotY = knotArea.yMin - 1.9f;
             slots = new Spool[data.Slots];
             slotPositions = new Vector3[data.Slots];
             for (int i = 0; i < data.Slots; i++)
@@ -91,8 +104,6 @@ namespace KnotAndSpool
             }
 
             // Spool columns
-            float columnTop = slotY - 2.3f;
-            float bottom = -size + 0.9f;
             visiblePerColumn = Mathf.Clamp(Mathf.FloorToInt((columnTop - bottom) / StackSpacing) + 1, 1, 3);
             columnTops = new Vector3[data.Columns.Count];
             for (int c = 0; c < data.Columns.Count; c++)
@@ -274,10 +285,18 @@ namespace KnotAndSpool
         static bool TryGetTap(out Vector2 screenPos)
         {
 #if ENABLE_INPUT_SYSTEM
-            var pointer = UnityEngine.InputSystem.Pointer.current;
-            if (pointer != null && pointer.press.wasPressedThisFrame)
+            foreach (var touch in UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches)
             {
-                screenPos = pointer.position.ReadValue();
+                if (touch.phase == UnityEngine.InputSystem.TouchPhase.Began)
+                {
+                    screenPos = touch.screenPosition;
+                    return true;
+                }
+            }
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse != null && mouse.leftButton.wasPressedThisFrame)
+            {
+                screenPos = mouse.position.ReadValue();
                 return true;
             }
 #else
@@ -295,9 +314,15 @@ namespace KnotAndSpool
 
         GUIStyle labelStyle, titleStyle, buttonStyle;
 
+        /// HUD size unit in pixels.
+        static float HudUnit() => Mathf.Min(Screen.height / 40f, Screen.width / 18f);
+
+        /// Pixels from the top of the screen to the bottom of the HUD row (label + Retry button).
+        static float HudHeightPixels() => Screen.height - Screen.safeArea.yMax + HudUnit() * 2.5f;
+
         void OnGUI()
         {
-            float u = Mathf.Min(Screen.height / 40f, Screen.width / 18f);
+            float u = HudUnit();
             if (labelStyle == null || labelStyle.fontSize != Mathf.RoundToInt(u * 1.1f))
             {
                 labelStyle = new GUIStyle(GUI.skin.label) { fontSize = Mathf.RoundToInt(u * 1.1f), fontStyle = FontStyle.Bold };

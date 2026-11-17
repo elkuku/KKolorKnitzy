@@ -29,6 +29,7 @@ namespace KnotAndSpool.EditorTools
                 var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
                 EditorSceneManager.SaveScene(scene, ScenePath);
                 Debug.Log($"[Knot & Spool] Created {ScenePath}");
+                EnsureGameInScene();
             }
 
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
@@ -48,9 +49,28 @@ namespace KnotAndSpool.EditorTools
         [MenuItem("Knot & Spool/Build and Run on Device")]
         static void BuildAndRun() => Build(BuildOptions.AutoRunPlayer);
 
+        /// The scene must contain a script component: if it has none, engine-code stripping removes
+        /// MonoScript (class ID 115) and the built-in GUI skin fails to load on device.
+        static void EnsureGameInScene()
+        {
+            var scene = EditorSceneManager.GetActiveScene();
+            if (scene.path != ScenePath)
+            {
+                if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+                scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            }
+            if (Object.FindAnyObjectByType<GameController>() != null) return;
+
+            new GameObject("Game").AddComponent<GameController>();
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            Debug.Log("[Knot & Spool] Added GameController to the main scene");
+        }
+
         static void Build(BuildOptions options)
         {
             EnsureSetup();
+            EnsureGameInScene();
             EditorUserBuildSettings.buildAppBundle = false;
             Directory.CreateDirectory(Path.GetDirectoryName(ApkPath));
             var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions

@@ -62,8 +62,9 @@ namespace KnotAndSpool
         /// Blocked threads are drawn dimmer so the player can see what is pullable.
         public void RefreshLook()
         {
-            var c = IsFree ? color : Palette.Dim(color);
-            line.startColor = line.endColor = c;
+            bool free = IsFree;
+            line.startColor = line.endColor = free ? color : Palette.Dim(color);
+            outline.startColor = outline.endColor = free ? Palette.Outline : Palette.Dim(Palette.Outline);
         }
 
         /// Animates the strand being wound onto a spool, then destroys itself.
@@ -72,6 +73,7 @@ namespace KnotAndSpool
             line.sortingOrder = 3001;
             outline.sortingOrder = 3000;
             line.startColor = line.endColor = color;
+            outline.startColor = outline.endColor = Palette.Outline;
 
             // Reel from the end nearest to the spool.
             if ((points[0] - target).sqrMagnitude > (points[points.Length - 1] - target).sqrMagnitude)

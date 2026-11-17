@@ -30,6 +30,7 @@ namespace KnotAndSpool
         public static Color Hex(int rgb) =>
             new Color(((rgb >> 16) & 0xFF) / 255f, ((rgb >> 8) & 0xFF) / 255f, (rgb & 0xFF) / 255f, 1f);
 
-        public static Color Dim(Color c) => Color.Lerp(c, new Color(0.3f, 0.26f, 0.24f), 0.4f);
+        /// Blocked threads: faded toward the background so the hue stays recognisable.
+        public static Color Dim(Color c) => Color.Lerp(c, Background, 0.55f);
     }
 }
