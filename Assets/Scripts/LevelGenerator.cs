@@ -3,182 +3,359 @@ using UnityEngine;
 
 namespace KnotAndSpool
 {
-    public class ThreadData
+    public class SpoolSpec
     {
-        public int Color;
-        public int Layer;              // higher = drawn on top
-        public Vector2[] Points;
-        public readonly List<int> CoveredBy = new List<int>(); // indices of threads lying on top of this one
+        public readonly int Color;
+        public readonly int Count; // stitches of yarn on this spool
+        public bool Hidden;        // color shown as "?" until the spool becomes reachable
+
+        public SpoolSpec(int color, int count)
+        {
+            Color = color;
+            Count = count;
+        }
     }
 
     public class LevelData
     {
         public int Number;
-        public int Capacity;            // threads per spool
-        public int Slots;               // spool slots in the tray
-        public List<ThreadData> Threads;
-        public List<List<int>> Columns; // spool colors per column, front first
+        public int Width, Height;
+        public int[,] Cells;                   // [row, col] palette index, row 0 = bottom (unravelled first)
+        public int Slots;                      // spool slots in the tray
+        public int BoardWidth, BoardHeight;
+        public bool[,] Walls;                  // [row, col] blocked board cells
+        public SpoolSpec[,] Board;             // [row, col] spool or null (empty)
+        public int Jitter;                     // how deeply needed spools are buried (difficulty, for reports)
     }
 
-    /// Builds a random but always-solvable tangle for a level number (deterministic per level).
+    /// Builds a level: a patchwork fabric plus a spool board that is guaranteed solvable.
+    ///
+    /// Rules: each column of the fabric unravels from the bottom, so the open squares are the lowest
+    /// remaining square of each column. A spool in the tray winds open squares of its color until it is full.
     public static class LevelGenerator
     {
-        const int SamplesPerSegment = 8;
-        const float CurveReach = 2.5f;
-        const int MaxSlots = 5; // more doesn't fit on a portrait screen
+        const int MaxSlots = 5;
+        public const int BoardWidth = 6;
 
-        public static LevelData Generate(int level, Rect area)
+        // Yarn colors used for fabrics (palette indices): red, blue, yellow, green, purple, orange, pink, teal, light blue, brown.
+        static readonly int[] FabricColors = { 0, 1, 2, 3, 4, 5, 6, 7, 11, 9 };
+
+        public static LevelData Generate(int level)
         {
             var rng = new System.Random(level * 7919 + 17);
-            int capacity = 3;
-            int colorCount = Mathf.Clamp(3 + (level - 1) / 3, 3, 6);
-            int spoolCount = Mathf.Clamp(3 + level, colorCount, 14);
-            int columnCount = level < 4 ? 3 : 4;
-            int slots = level < 8 ? 5 : 4;
-            int threadCount = spoolCount * capacity;
+            int w = level <= 3 ? 6 : 7;
+            int h = Mathf.Min(8 + level, 14);
+            int colorCount = Mathf.Clamp(3 + (level - 1) / 2, 3, 7);
+            int capacity = level <= 3 ? 5 : 6;
+            int slots = level == 1 ? 5 : level <= 4 ? 4 : 3;
+            // How far needed spools get buried behind ones that aren't needed yet.
+            int window = level == 1 ? 0 : level == 2 ? 1 : level <= 4 ? 2 : 3;
+            float hiddenChance = level < 3 ? 0f : level < 8 ? 0.3f : 0.4f;
 
-            var threads = new List<ThreadData>(threadCount);
-            for (int i = 0; i < threadCount; i++)
-                threads.Add(new ThreadData { Layer = i, Points = MakeCurve(rng, area) });
-            ComputeCoverage(threads);
-
-            // Pick colors until the "pull from the top down" solution fits into the tray.
-            List<int> spoolOrder = null;
-            List<int> bestColors = null;
-            int bestOpen = int.MaxValue;
-            for (int attempt = 0; attempt < 300; attempt++)
+            for (int attempt = 0; ; attempt++)
             {
-                var colors = new List<int>();
-                for (int s = 0; s < spoolCount; s++)
-                {
-                    int c = s < colorCount ? s : rng.Next(colorCount);
-                    for (int k = 0; k < capacity; k++) colors.Add(c);
-                }
-                Shuffle(colors, rng);
-                for (int i = 0; i < threadCount; i++) threads[i].Color = colors[i];
+                var cells = MakeFabric(rng, w, h, PickColors(rng, colorCount));
+                var sequence = PlanSpools(cells, capacity, out int maxOpen);
+                bool lastChance = attempt >= 80;
+                if (maxOpen > slots && !lastChance) continue;
+                int traySlots = Mathf.Clamp(Mathf.Max(slots, maxOpen), 1, MaxSlots);
 
-                var order = PlanSpools(threads, capacity, out int maxOpen);
-                if (maxOpen < bestOpen)
+                var layout = MakeBoardLayout(level, sequence.Count, rng, out var walls, out int extra);
+                // Try the hardest dealing first; fall back to gentler ones. Every candidate is verified by
+                // playing it through with the game's own winding rules.
+                for (int jitter = window; jitter >= 0; jitter--)
                 {
-                    bestOpen = maxOpen;
-                    spoolOrder = order;
-                    bestColors = colors;
+                    for (int t = 0; t < (jitter == 0 ? 1 : 15); t++)
+                    {
+                        var dealt = Jitter(sequence, jitter, rng);
+                        if (!Simulate(cells, dealt, traySlots) && !(lastChance && jitter == 0)) continue;
+
+                        var data = new LevelData
+                        {
+                            Number = level,
+                            Width = w,
+                            Height = h,
+                            Cells = cells,
+                            Slots = traySlots,
+                            BoardWidth = BoardWidth,
+                            BoardHeight = walls.GetLength(0),
+                            Walls = walls,
+                            Board = new SpoolSpec[walls.GetLength(0), BoardWidth],
+                            Jitter = jitter,
+                        };
+                        for (int i = 0; i < dealt.Count; i++)
+                        {
+                            var cell = layout[extra + i];
+                            dealt[i].Hidden = cell.y > 0 && rng.NextDouble() < hiddenChance;
+                            data.Board[cell.y, cell.x] = dealt[i];
+                        }
+                        return data;
+                    }
                 }
-                if (maxOpen <= slots) break;
             }
-            // Re-apply the colors that produced the best plan.
-            for (int i = 0; i < threadCount; i++) threads[i].Color = bestColors[i];
-            slots = Mathf.Clamp(bestOpen, slots, MaxSlots);
-
-            // Deal spools round-robin so that the planned order is always reachable from the column fronts.
-            var columns = new List<List<int>>();
-            for (int c = 0; c < columnCount; c++) columns.Add(new List<int>());
-            for (int i = 0; i < spoolOrder.Count; i++) columns[i % columnCount].Add(spoolOrder[i]);
-
-            return new LevelData
-            {
-                Number = level,
-                Capacity = capacity,
-                Slots = slots,
-                Threads = threads,
-                Columns = columns,
-            };
         }
 
-        /// Simulates pulling threads strictly top-down; returns the order spools are needed in.
-        static List<int> PlanSpools(List<ThreadData> threads, int capacity, out int maxOpen)
+        /// Shuffles the needed order locally: each spool may move up to `window` places later.
+        static List<SpoolSpec> Jitter(List<SpoolSpec> sequence, int window, System.Random rng)
         {
-            var order = new List<int>();
-            var openCount = new Dictionary<int, int>(); // color -> threads on its open spool
-            int open = 0;
-            maxOpen = 0;
-            for (int i = threads.Count - 1; i >= 0; i--)
+            var keys = new double[sequence.Count];
+            var idx = new List<int>();
+            for (int i = 0; i < sequence.Count; i++)
             {
-                int c = threads[i].Color;
-                if (!openCount.TryGetValue(c, out int n) || n == 0)
+                keys[i] = i + rng.NextDouble() * (window + 1);
+                idx.Add(i);
+            }
+            idx.Sort((x, y) => keys[x].CompareTo(keys[y]));
+            var result = new List<SpoolSpec>();
+            foreach (int i in idx) result.Add(new SpoolSpec(sequence[i].Color, sequence[i].Count));
+            return result;
+        }
+
+        /// Column the spool in tray slot `slot` winds from: a column whose bottom square has its color, closest
+        /// to the spool (in normalized width, so it doesn't depend on screen size). Shared with the game.
+        public static int PickColumn(int columns, int slotCount, int slot, int color, System.Func<int, int> bottomColor)
+        {
+            // Exact integer distance |(c+½)/columns − (slot+½)/slotCount| scaled by 2·columns·slotCount, so ties
+            // (e.g. two columns symmetric around the spool) always go to the leftmost column on every platform.
+            int best = -1;
+            int bestDist = int.MaxValue;
+            for (int c = 0; c < columns; c++)
+            {
+                if (bottomColor(c) != color) continue;
+                int dist = System.Math.Abs((2 * c + 1) * slotCount - (2 * slot + 1) * columns);
+                if (dist < bestDist)
                 {
-                    order.Add(c);
-                    open++;
-                    maxOpen = Mathf.Max(maxOpen, open);
-                    n = 0;
+                    best = c;
+                    bestDist = dist;
                 }
-                n++;
-                if (n == capacity)
+            }
+            return best;
+        }
+
+        /// Plays the level the "intended" way: whenever nothing can be wound, take the next spool in board
+        /// order into the first free slot. Returns false if the tray clogs.
+        public static bool Simulate(int[,] cells, List<SpoolSpec> takeOrder, int slots)
+        {
+            int h = cells.GetLength(0), w = cells.GetLength(1);
+            var next = new int[w];
+            var trayColor = new int[slots];
+            var trayNeed = new int[slots];
+            for (int i = 0; i < slots; i++) trayColor[i] = -1;
+            int left = h * w, k = 0;
+            System.Func<int, int> bottom = c => next[c] < h ? cells[next[c], c] : -1;
+
+            while (true)
+            {
+                bool progress = true;
+                while (progress)
                 {
-                    n = 0;
-                    open--;
+                    progress = false;
+                    for (int s = 0; s < slots; s++)
+                    {
+                        if (trayColor[s] < 0) continue;
+                        int col = PickColumn(w, slots, s, trayColor[s], bottom);
+                        if (col < 0) continue;
+                        next[col]++;
+                        left--;
+                        progress = true;
+                        if (--trayNeed[s] == 0) trayColor[s] = -1;
+                    }
                 }
-                openCount[c] = n;
+                if (left == 0) return true;
+                if (k >= takeOrder.Count) return false;
+
+                int free = System.Array.IndexOf(trayColor, -1);
+                if (free < 0) return false;
+                trayColor[free] = takeOrder[k].Color;
+                trayNeed[free] = takeOrder[k].Count;
+                k++;
+            }
+        }
+
+        static int[] PickColors(System.Random rng, int count)
+        {
+            var pool = new List<int>(FabricColors);
+            var picked = new int[count];
+            for (int i = 0; i < count; i++)
+            {
+                int j = rng.Next(pool.Count);
+                picked[i] = pool[j];
+                pool.RemoveAt(j);
+            }
+            return picked;
+        }
+
+        /// Patchwork: vertical runs of 1–3 squares per color, often continuing the left neighbour's color so
+        /// patches form wider blocks.
+        static int[,] MakeFabric(System.Random rng, int w, int h, int[] colors)
+        {
+            var cells = new int[h, w];
+            for (int c = 0; c < w; c++)
+            {
+                int r = 0;
+                while (r < h)
+                {
+                    int run = 1 + rng.Next(3);
+                    int color = c > 0 && rng.NextDouble() < 0.55 ? cells[r, c - 1] : colors[rng.Next(colors.Length)];
+                    for (int k = 0; k < run && r < h; k++, r++) cells[r, c] = color;
+                }
+            }
+            return cells;
+        }
+
+        /// Board shape (walls) plus a removal order: each cell in the list is reachable once all earlier cells
+        /// are empty. The first `extra` cells start empty; spools are dealt onto the rest in order.
+        static List<Vector2Int> MakeBoardLayout(int level, int spoolCount, System.Random rng, out bool[,] walls, out int extra)
+        {
+            int bw = BoardWidth;
+            int wallCount = level <= 2 ? 0 : Mathf.Min(1 + level / 2, 6);
+            int bh = Mathf.CeilToInt((spoolCount + wallCount) / (float)bw);
+            extra = bw * bh - spoolCount - wallCount;
+
+            walls = null;
+            for (int attempt = 0; attempt < 200; attempt++)
+            {
+                walls = new bool[bh, bw];
+                if (bh < 2) break;
+                for (int k = 0; k < wallCount; k++)
+                {
+                    int r = 1 + rng.Next(bh - 1), c = rng.Next(bw);
+                    if (walls[r, c]) k--;
+                    else walls[r, c] = true;
+                }
+                if (AllConnected(walls)) break;
+                if (attempt == 199) walls = new bool[bh, bw];
+            }
+
+            var occupied = new bool[bh, bw];
+            for (int r = 0; r < bh; r++)
+            for (int c = 0; c < bw; c++)
+                occupied[r, c] = !walls[r, c];
+
+            var order = new List<Vector2Int>();
+            var candidates = new List<Vector2Int>();
+            while (true)
+            {
+                var reach = Reachable(walls, occupied);
+                candidates.Clear();
+                for (int r = 0; r < bh; r++)
+                for (int c = 0; c < bw; c++)
+                    if (occupied[r, c] && reach[r, c]) candidates.Add(new Vector2Int(c, r));
+                if (candidates.Count == 0) break;
+                var pick = candidates[rng.Next(candidates.Count)];
+                occupied[pick.y, pick.x] = false;
+                order.Add(pick);
             }
             return order;
         }
 
-        static Vector2[] MakeCurve(System.Random rng, Rect area)
+        /// A cell is reachable if it is in the top row, or touches an empty cell connected to the top through
+        /// empty cells.
+        public static bool[,] Reachable(bool[,] walls, bool[,] occupied)
         {
-            // 4 control points scattered around a random centre, so each strand stays fairly local
-            // (otherwise every strand crosses every other and only one is ever free).
-            var ctrl = new Vector2[4];
-            float cx = Mathf.Lerp(area.xMin, area.xMax, 0.15f + 0.7f * (float)rng.NextDouble());
-            float cy = Mathf.Lerp(area.yMin, area.yMax, 0.15f + 0.7f * (float)rng.NextDouble());
-            for (int i = 0; i < ctrl.Length; i++)
+            int bh = walls.GetLength(0), bw = walls.GetLength(1);
+            var open = new bool[bh, bw]; // empty and connected to the top
+            var queue = new Queue<Vector2Int>();
+            for (int c = 0; c < bw; c++)
+                if (!walls[0, c] && !occupied[0, c])
+                {
+                    open[0, c] = true;
+                    queue.Enqueue(new Vector2Int(c, 0));
+                }
+            while (queue.Count > 0)
             {
-                float x = cx + ((float)rng.NextDouble() * 2f - 1f) * CurveReach;
-                float y = cy + ((float)rng.NextDouble() * 2f - 1f) * CurveReach;
-                ctrl[i] = new Vector2(Mathf.Clamp(x, area.xMin, area.xMax), Mathf.Clamp(y, area.yMin, area.yMax));
+                var p = queue.Dequeue();
+                foreach (var d in Directions)
+                {
+                    var q = p + d;
+                    if (q.x < 0 || q.y < 0 || q.x >= bw || q.y >= bh) continue;
+                    if (open[q.y, q.x] || walls[q.y, q.x] || occupied[q.y, q.x]) continue;
+                    open[q.y, q.x] = true;
+                    queue.Enqueue(q);
+                }
             }
 
-            var pts = new List<Vector2>();
-            for (int seg = 0; seg < ctrl.Length - 1; seg++)
+            var reach = new bool[bh, bw];
+            for (int r = 0; r < bh; r++)
+            for (int c = 0; c < bw; c++)
             {
-                Vector2 p0 = ctrl[Mathf.Max(seg - 1, 0)], p1 = ctrl[seg], p2 = ctrl[seg + 1], p3 = ctrl[Mathf.Min(seg + 2, ctrl.Length - 1)];
-                for (int s = 0; s < SamplesPerSegment; s++)
-                    pts.Add(CatmullRom(p0, p1, p2, p3, s / (float)SamplesPerSegment));
+                if (walls[r, c]) continue;
+                bool ok = r == 0;
+                foreach (var d in Directions)
+                {
+                    int rr = r + d.y, cc = c + d.x;
+                    if (rr >= 0 && cc >= 0 && rr < bh && cc < bw && open[rr, cc]) ok = true;
+                }
+                reach[r, c] = ok;
             }
-            pts.Add(ctrl[ctrl.Length - 1]);
-            for (int i = 0; i < pts.Count; i++)
-                pts[i] = new Vector2(Mathf.Clamp(pts[i].x, area.xMin, area.xMax), Mathf.Clamp(pts[i].y, area.yMin, area.yMax));
-            return pts.ToArray();
+            return reach;
         }
 
-        static Vector2 CatmullRom(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
+        static readonly Vector2Int[] Directions = { Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right };
+
+        static bool AllConnected(bool[,] walls)
         {
-            float t2 = t * t, t3 = t2 * t;
-            return 0.5f * (2f * p1 + (-p0 + p2) * t + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 + (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
+            int bh = walls.GetLength(0), bw = walls.GetLength(1);
+            var empty = new bool[bh, bw]; // pretend everything is empty: is every cell connected to the top?
+            var reach = Reachable(walls, empty);
+            for (int r = 0; r < bh; r++)
+            for (int c = 0; c < bw; c++)
+                if (!walls[r, c] && !reach[r, c]) return false;
+            return true;
         }
 
-        static void ComputeCoverage(List<ThreadData> threads)
+        /// Plays the level greedily: wind whatever an open spool can; when stuck, open a spool for the color
+        /// with the most open squares. Returns the spools in the order they were needed.
+        static List<SpoolSpec> PlanSpools(int[,] cells, int capacity, out int maxOpen)
         {
-            for (int a = 0; a < threads.Count; a++)
-            for (int b = a + 1; b < threads.Count; b++)
-                if (Crosses(threads[a].Points, threads[b].Points))
-                    threads[a].CoveredBy.Add(b); // b has the higher layer
-        }
+            int h = cells.GetLength(0), w = cells.GetLength(1);
+            var next = new int[w];
+            var unassigned = new Dictionary<int, int>();
+            foreach (int c in cells)
+                unassigned[c] = unassigned.TryGetValue(c, out int n) ? n + 1 : 1;
 
-        static bool Crosses(Vector2[] a, Vector2[] b)
-        {
-            for (int i = 0; i < a.Length - 1; i++)
-            for (int j = 0; j < b.Length - 1; j++)
-                if (SegmentsIntersect(a[i], a[i + 1], b[j], b[j + 1]))
-                    return true;
-            return false;
-        }
+            var open = new Dictionary<int, int>(); // color -> yarn left on its open spool
+            var sequence = new List<SpoolSpec>();
+            int left = h * w;
+            maxOpen = 0;
 
-        static bool SegmentsIntersect(Vector2 p1, Vector2 p2, Vector2 q1, Vector2 q2)
-        {
-            float d1 = Cross(q2 - q1, p1 - q1), d2 = Cross(q2 - q1, p2 - q1);
-            float d3 = Cross(p2 - p1, q1 - p1), d4 = Cross(p2 - p1, q2 - p1);
-            return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
-        }
-
-        static float Cross(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
-
-        static void Shuffle<T>(List<T> list, System.Random rng)
-        {
-            for (int i = list.Count - 1; i > 0; i--)
+            while (left > 0)
             {
-                int j = rng.Next(i + 1);
-                (list[i], list[j]) = (list[j], list[i]);
+                bool knitted = false;
+                for (int col = 0; col < w && !knitted; col++)
+                {
+                    if (next[col] >= h) continue;
+                    int color = cells[next[col], col];
+                    if (!open.TryGetValue(color, out int yarn)) continue;
+
+                    next[col]++;
+                    left--;
+                    if (--yarn == 0) open.Remove(color);
+                    else open[color] = yarn;
+                    knitted = true;
+                }
+                if (knitted) continue;
+
+                int best = -1, bestCount = -1;
+                var openCounts = new int[Palette.Count];
+                for (int col = 0; col < w; col++)
+                    if (next[col] < h) openCounts[cells[next[col], col]]++;
+                for (int color = 0; color < openCounts.Length; color++)
+                {
+                    if (openCounts[color] > bestCount)
+                    {
+                        best = color;
+                        bestCount = openCounts[color];
+                    }
+                }
+
+                int count = Mathf.Min(capacity, unassigned[best]);
+                unassigned[best] -= count;
+                open[best] = count;
+                sequence.Add(new SpoolSpec(best, count));
+                maxOpen = Mathf.Max(maxOpen, open.Count);
             }
+            return sequence;
         }
     }
 }
